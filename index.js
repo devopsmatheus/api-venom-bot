@@ -1,49 +1,43 @@
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
-import { create } from "venom-bot";
+import qrcode from "qrcode-terminal";
+import pkg from "whatsapp-web.js";
+
+const { Client, LocalAuth } = pkg;
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-let client;
-const chromiumArgs = [
-    '--disable-web-security',
-    '--no-sandbox',
-    '--disable-web-security',
-    '--aggressive-cache-discard',
-    '--disable-cache',
-    '--disable-application-cache',
-    '--disable-offline-load-stale-cache',
-    '--disk-cache-size=0',
-    '--disable-background-networking',
-    '--disable-default-apps',
-    '--disable-extensions',
-    '--disable-sync',
-    '--disable-translate',
-    '--hide-scrollbars',
-    '--metrics-recording-only',
-    '--mute-audio',
-    '--no-first-run',
-    '--safebrowsing-disable-auto-update',
-    '--ignore-certificate-errors',
-    '--ignore-ssl-errors',
-    '--ignore-certificate-errors-spki-list',
-]
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: { headless: true }
+});
 
-create({
-    browserArgs: chromiumArgs,
-    session: "whatsapp-session", // nome da sessão
-    multidevice: true // suporta multi-dispositivo
-})
-    .then((venomClient) => {
-        client = venomClient;
-        console.log("✅ WhatsApp conectado com sucesso!");
-    })
-    .catch((err) => {
-        console.error("❌ Erro ao iniciar o venom-bot:", err);
-    });
+let isReady = false;
+
+// QR Code para autenticação
+client.on("qr", qr => {
+    console.log("📲 Escaneie o QR Code abaixo:");
+    qrcode.generate(qr, { small: true });
+});
+
+client.on("ready", () => {
+    console.log("✅ WhatsApp pronto!");
+    isReady = true;
+});
+
+client.on("auth_failure", msg => {
+    console.error("❌ Falha na autenticação:", msg);
+});
+
+client.initialize();
+
+const formatPhone = (phone) => {
+    let num = phone.toString().replace(/\D/g, "");
+    if (!num.startsWith("55")) num = "55" + num;
+    return num + "@c.us";
+};
 
 app.post("/send", async (req, res) => {
     try {
@@ -53,21 +47,37 @@ app.post("/send", async (req, res) => {
             return res.status(400).json({ error: "Campos 'phone' e 'message' são obrigatórios." });
         }
 
-        if (!client) {
-            return res.status(500).json({ error: "WhatsApp não está conectado ainda." });
+        if (!isReady) {
+            return res.status(503).json({ error: "WhatsApp ainda não está pronto. Escaneie o QR Code se necessário." });
         }
 
-        const formattedNumber = phone.includes("@c.us") ? phone : `${phone}@c.us`;
+        const jid = formatPhone(phone);
+        console.log(`➡️ Enviando mensagem para ${jid}: ${message}`);
+        await client.sendMessage(jid, message);
 
-        await client.sendText(formattedNumber, message);
-        res.json({ success: true, message: "Mensagem enviada com sucesso!" });
-    } catch (error) {
-        console.error("Erro ao enviar mensagem:", error);
-        res.status(500).json({ error: "Erro ao enviar mensagem." });
+        return res.json({ success: true, message: "Mensagem enviada com sucesso!" });
+    } catch (err) {
+        console.error("❌ Erro ao enviar mensagem:", err);
+        return res.status(500).json({ error: "Erro ao enviar mensagem." });
     }
 });
 
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
+app.get("/status", (req, res) => {
+    res.json({ state: isReady ? "CONNECTED" : "DISCONNECTED" });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+
+process.on("SIGINT", async () => {
+    console.log("Encerrando servidor...");
+    if (client && client.destroy) {
+        try {
+            await client.destroy();
+            console.log("Sessão WhatsApp finalizada.");
+        } catch (e) {
+            console.warn("Erro ao encerrar WhatsApp:", e);
+        }
+    }
+    process.exit(0);
 });

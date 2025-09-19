@@ -11,7 +11,20 @@ app.use(express.json());
 
 const client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: { headless: true }
+    puppeteer: {
+        headless: true,
+        executablePath: "/usr/bin/chromium-browser", // Usa o Chromium do sistema
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--single-process",
+            "--disable-gpu"
+        ]
+    }
 });
 
 let isReady = false;
